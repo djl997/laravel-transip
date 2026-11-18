@@ -1,5 +1,9 @@
 # Laravel TransIP
 
+[![Version](https://img.shields.io/badge/version-v6.55.0-blue)](https://github.com/djl997/laravel-transip/releases/tag/v6.55.0)
+[![TransIP API](https://img.shields.io/badge/TransIP%20API-v6.55-blue)](https://api.transip.nl/rest/docs.html)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#testing)
+
 A small Laravel client for the [TransIP REST API v6](https://api.transip.nl/rest/docs.html). It signs the auth request with your private key, caches the access token, and gives you a typed method for every documented endpoint, plus `get` / `post` / `put` / `patch` / `delete` for raw calls.
 
 Checked against **TransIP API v6.55** (293 endpoints).
