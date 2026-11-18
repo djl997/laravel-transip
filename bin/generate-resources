@@ -1,0 +1,460 @@
+#!/usr/bin/env php
+<?php
+
+/*
+ * Generates src/Resources/* and src/HasResources.php from TransIP's API Blueprint,
+ * the source of https://api.transip.nl/rest/docs.html.
+ *
+ *   php bin/generate-resources [path-or-url-to-blueprint.apib]
+ *   vendor/bin/pint
+ *
+ * We use the Blueprint and not openapi.yaml: the OpenAPI export drops actions that
+ * share a method and path (Register vs Transfer a domain, Start/Stop/Reset a VPS, ...).
+ */
+
+const DOCS = 'https://api.transip.nl/rest/docs.html';
+const SOURCE = 'https://api.transip.nl/rest/blueprint.apib';
+
+// Accessor names that camelCase gets wrong.
+const GROUP_NAMES = ['HA-IP' => 'Haip', 'VPS' => 'Vps', 'SSL Certificates' => 'SslCertificates', 'OpenStack' => 'OpenStack'];
+
+// The group's own noun, dropped from method names (longest first).
+const GROUP_NOUNS = [
+    'Domains' => ['domain name', 'domain'],
+    'VPS' => ['vps'],
+    'HA-IP' => ['ha ip'],
+    'Kubernetes' => ['cluster'],
+    'Acronis' => ['tenant'],
+    'Filehosting' => ['disk'],
+    'SSL Certificates' => ['ssl certificate', 'certificate'],
+    'Colocations' => ['colocation'],
+    'Actions' => ['action'],
+    'Forwarding service' => ['forwarding service'],
+];
+
+// Method names where the title-based name collides or reads badly: "group|METHOD path|title" => name.
+const METHOD_NAMES = [
+    'Domains|GET /domains/{domainName}|Retrieve an existing domain' => 'get',
+    'Domains|GET /domain-defaults/contacts|List all default domain contacts for your account' => 'listDefaultContacts',
+    'Domains|PUT /domain-defaults/contacts|Update contacts for a account' => 'updateDefaultContacts',
+    'Domains|GET /domains/{domainName}/actions|Get current domain action' => 'getAction',
+    'Domains|GET /tlds/{tld}|Get info for a TLD' => 'getTld',
+    'Domains|GET /domain-verifications/{id}|Get verification details' => 'getVerification',
+    'Kubernetes|GET /kubernetes/products|List kubernetes products' => 'listProducts',
+    'Kubernetes|GET /kubernetes/products/{product}|Get information about a Kubernetes product' => 'getProduct',
+    'Kubernetes|GET /kubernetes/releases|List all available Kubernetes releases' => 'listReleases',
+    'Kubernetes|GET /kubernetes/releases/{version}|List a single Kubernetes release' => 'getRelease',
+    'Kubernetes|GET /kubernetes/clusters/{clusterName}/releases|List all available Kubernetes releases' => 'listClusterReleases',
+    'Kubernetes|GET /kubernetes/clusters/{clusterName}/releases/{version}|List a single Kubernetes release' => 'getClusterRelease',
+    'Kubernetes|GET /kubernetes/clusters/{clusterName}/load-balancers/{name}|Get LoadBalancer info' => 'getLoadBalancer',
+    'Kubernetes|GET /kubernetes/clusters/{clusterName}/load-balancers/{name}/status-reports/{nodeUuid}|Get LoadBalancer info' => 'getLoadBalancerStatusReport',
+    'Actions|GET /actions/{uuid}/children|List all child actions for a parent action' => 'listChildren',
+    'Colocations|GET /colocations/{colocationName}/ip-addresses/{ipAddress}|Get IP addresses for a colocation' => 'getIpAddress',
+    'Colocations|PUT /colocations/{colocationName}/ip-addresses/{ipAddress}|Set reverse DNS for an IP address' => 'setReverseDns',
+    'VPS|PUT /vps/{vpsIdentifier}/settings/{setting}|Update a setting for the specified VPS' => 'updateSetting',
+    'VPS|GET /vps/{vpsIdentifier}/settings/{setting}|Get VPS Setting Information' => 'getSetting',
+    'VPS|PATCH /vps/{vpsIdentifier}/backups/{backupId}|Convert backup to snapshot' => 'convertBackupToSnapshot',
+    'VPS|GET /big-storages/{bigStorageIdentifier}/backups|List backups for a big storage' => 'listBigStorageBackups',
+    'VPS|GET /block-storages/{blockStorageIdentifier}/backups|List backups for a block storage' => 'listBlockStorageBackups',
+    'VPS|GET /operating-systems|Filter Operating Systems on specifications' => 'filterOperatingSystems',
+    'VPS|POST /mail-service|Add mail service DNS entries to domains' => 'addMailServiceDnsEntries',
+    'VPS|GET /vps/{vpsIdentifier}/ip-addresses/{ipAddress}|Get IP address info by address' => 'getIpAddress',
+    'OpenStack|GET /openstack/projects/{projectId}/users|List users in a project' => 'listProjectUsers',
+    'OpenStack|POST /openstack/projects/{projectId}/users|Add a user to a project' => 'addProjectUser',
+    'OpenStack|DELETE /openstack/projects/{projectId}/users/{userId}|Remove a user from project' => 'removeProjectUser',
+    'OpenStack|GET /openstack/projects/{projectId}/assignable-users|List users that can be assigned to a project' => 'listAssignableUsers',
+    'OpenStack|GET /openstack/users/{userId}/tokens|List all S3 tokens for a user' => 'listS3Tokens',
+    'Filehosting|PUT /filehosting/disks/{diskId}/users|Reset password for a disk user' => 'resetUserPassword',
+    'HA-IP|GET /haips/{haipName}|Get HA-IP info' => 'get',
+    'HA-IP|DELETE /haips/{haipName}/certificates/{certificateId}|Detach a certificate from this HA-IP' => 'detachCertificate',
+    'HA-IP|GET /haips/{haipName}/ip-addresses|List all IPs attached to a HA-IP' => 'listIpAddresses',
+    'HA-IP|DELETE /haips/{haipName}/ip-addresses|Detach all IPs from HA-IP' => 'detachIpAddresses',
+    'HA-IP|PUT /haips/{haipName}/ip-addresses|Set HA-IP attached IP addresses' => 'setIpAddresses',
+    'HA-IP|GET /haips/{haipName}/port-configurations/{portConfigurationId}|Get info about a specific PortConfiguration' => 'getPortConfiguration',
+    'Acronis|GET /acronis/tenants/{tenantUuid}/login|Generate one time token login url' => 'getLoginUrl',
+    'Acronis|GET /acronis/tenants/{tenantUuid}/usages|Fetch overview of current usages' => 'getUsages',
+    'Acronis|GET /acronis/tenants/{tenantUuid}/usage|Fetch overview of current storage usage [DEPRECATED]' => 'getUsage',
+    'SSL Certificates|GET /ssl-certificates/{certificateId}/details|Details for SSL certificate by id' => 'getDetails',
+    'General|GET /products/{productName}/elements|List specifications for product' => 'listProductElements',
+    'General|GET /availability-zones|List available AvailabilityZones' => 'listAvailabilityZones',
+    'Account|GET /invoices/{invoiceNumber}/pdf|Retrieve an invoice as PDF file' => 'getInvoicePdf',
+    'Account|GET /contact-key|Contact key' => 'getContactKey',
+    'Email|PATCH /email/{domain}/mail-addons/{id}|Link email addon to mailbox' => 'linkMailAddon',
+    'Email|PATCH /email/{domain}/mail-addons/{id}|Unlink email addon to mailbox' => 'unlinkMailAddon',
+];
+
+$source = array_values(array_filter(array_slice($argv, 1), fn ($a) => $a !== '--list'))[0] ?? SOURCE;
+$apib = file_get_contents($source) ?: exit("Could not read $source\n");
+preg_match('/^VERSION: (\S+)/m', $apib, $m) ?: exit("No VERSION in blueprint\n");
+$version = $m[1];
+
+[$groups, $structs] = parse($apib);
+$root = dirname(__DIR__);
+
+array_map('unlink', glob("$root/src/Resources/*.php"));
+@mkdir("$root/src/Resources");
+
+$accessors = [];
+$usedNames = [];
+$failed = false;
+foreach ($groups as $group => $actions) {
+    $class = GROUP_NAMES[$group] ?? str_replace(' ', '', ucwords(preg_replace('/[^a-z0-9]+/i', ' ', $group)));
+    $accessor = lcfirst($class);
+    $accessors[$accessor] = [$class, $group];
+
+    $methods = [];
+    foreach ($actions as $action) {
+        $name = methodName($group, $action);
+        if (in_array('--list', $argv)) {
+            echo "$accessor()->$name\t".key_of($group, $action)."\n";
+        }
+        if (isset($methods[$name])) {
+            fwrite(STDERR, "Duplicate method $class::$name(): add one to METHOD_NAMES\n  ".key_of($group, $action)."\n");
+            $failed = true;
+        }
+        $methods[$name] = renderMethod($name, $action, $structs);
+    }
+
+    $anchor = slug($group);
+    file_put_contents("$root/src/Resources/$class.php", <<<PHP
+        <?php
+
+        // Generated by bin/generate-resources from TransIP API v$version. Don't edit by hand.
+
+        namespace Djl997\LaravelTransip\Resources;
+
+        use Djl997\LaravelTransip\Transip;
+
+        /**
+         * TransIP API: $group.
+         *
+         * @link https://api.transip.nl/rest/docs.html#$anchor
+         */
+        class $class
+        {
+            public function __construct(protected Transip \$transip) {}
+
+        PHP.implode("\n", $methods)."}\n");
+}
+
+foreach (array_diff(array_keys(METHOD_NAMES), $usedNames) as $key) {
+    fwrite(STDERR, "METHOD_NAMES key matches no action (renamed upstream?): $key\n");
+    $failed = true;
+}
+$failed && exit(1);
+
+$traitMethods = '';
+$facade = '';
+foreach ($accessors as $accessor => [$class, $group]) {
+    $traitMethods .= <<<PHP
+
+            /** TransIP API: $group. */
+            public function $accessor(): Resources\\$class
+            {
+                return new Resources\\$class(\$this);
+            }
+
+        PHP;
+    $facade .= " * @method static \\Djl997\\LaravelTransip\\Resources\\$class $accessor() TransIP API: $group\n";
+}
+
+file_put_contents("$root/src/HasResources.php", <<<PHP
+    <?php
+
+    // Generated by bin/generate-resources from TransIP API v$version. Don't edit by hand.
+
+    namespace Djl997\LaravelTransip;
+
+    /** Typed accessors for every documented endpoint, grouped like the docs: Transip::domains()->listDnsEntries('example.com'). */
+    trait HasResources
+    {
+    PHP.$traitMethods."}\n");
+
+$facadeFile = "$root/src/Facades/Transip.php";
+$code = preg_replace('/( \* @method static \\\\Djl997\\\\LaravelTransip\\\\Resources\\\\.*\n)+/', '', file_get_contents($facadeFile));
+file_put_contents($facadeFile, str_replace(" * @method static string token()\n", " * @method static string token()\n".$facade, $code));
+
+echo 'Generated '.count($accessors).' resources, '.array_sum(array_map('count', $groups))." methods from TransIP API v$version.\n";
+
+/** @return array{0: array<string, list<array>>, 1: array<string, list<array>>} */
+function parse(string $apib): array
+{
+    $groups = $structs = [];
+    $group = $resource = $action = $struct = null;
+    $section = $sub = null;
+    $anchors = [];
+
+    foreach (explode("\n", $apib) as $line) {
+        if (preg_match('/^# Group (.+)$/', $line, $m)) {
+            $group = trim($m[1]);
+            $resource = $action = null;
+        } elseif (preg_match('/^## Data Structures/', $line)) {
+            $group = $resource = $action = null;
+            $struct = '';
+        } elseif ($struct !== null && preg_match('/^### (\w+)/', $line, $m)) {
+            $struct = $m[1];
+            $structs[$struct] = [];
+        } elseif ($struct && preg_match('/^\+ (.+)$/', $line, $m)) {
+            $structs[$struct][] = field($m[1]);
+        } elseif ($group && preg_match('/^## (.+?) \[(\/[^\]]+)\]/', $line, $m)) {
+            $resource = ['name' => trim($m[1]), 'path' => $m[2], 'params' => []];
+            $action = null;
+            $section = 'resource';
+        } elseif ($resource && preg_match('/^### (.+?) \[(GET|POST|PUT|PATCH|DELETE)(?: (\/[^\]]+))?\]/', $line, $m)) {
+            $method = $m[2];
+            $anchor = slug($group).'-'.slug($resource['name']).'-'.strtolower($method);
+            $anchors[$anchor] = isset($anchors[$anchor]) ? $anchors[$anchor] + 1 : 0;
+            $groups[$group][] = [
+                'title' => trim($m[1]),
+                'method' => $method,
+                'path' => $m[3] ?? $resource['path'],
+                'description' => '',
+                'params' => $resource['params'],
+                'request' => [],
+                'response' => null,
+                'anchor' => $anchor.($anchors[$anchor] ? '-'.$anchors[$anchor] : ''),
+            ];
+            $action = array_key_last($groups[$group]);
+            $section = 'description';
+            $sub = null;
+        } elseif (! $resource) {
+            continue;
+        } elseif (preg_match('/^\+ Parameters/', $line)) {
+            $section = 'params';
+        } elseif (preg_match('/^\+ Request/', $line)) {
+            [$section, $sub] = ['request', null];
+        } elseif (preg_match('/^\+ Response (\d+)/', $line, $m)) {
+            // Only the first 2xx response describes the result; errors are thrown.
+            $ok = $m[1] < 300 && $action !== null && $groups[$group][$action]['response'] === null;
+            [$section, $sub] = [$ok ? 'response' : 'error', null];
+            if ($ok) {
+                $groups[$group][$action]['response'] = [];
+            }
+        } elseif ($section === 'params' && preg_match('/^ {4}\+ (.+)$/', $line, $m)) {
+            $param = field($m[1]);
+            if ($action === null) {
+                $resource['params'][] = $param;
+            } else {
+                $groups[$group][$action]['params'][] = $param;
+            }
+        } elseif (in_array($section, ['request', 'response']) && preg_match('/^ {4}\+ (\w+)/', $line, $m)) {
+            $sub = $m[1];
+        } elseif ($sub === 'Attributes' && $action !== null && preg_match('/^ {8}\+ (.+)$/', $line, $m)) {
+            $groups[$group][$action][$section === 'request' ? 'request' : 'response'][] = field($m[1]);
+        } elseif ($section === 'description' && $action !== null) {
+            $groups[$group][$action]['description'] .= $line."\n";
+        }
+    }
+
+    // Auth is handled by the client itself.
+    unset($groups['Introduction']);
+    $groups = array_filter($groups);
+
+    return [$groups, $structs];
+}
+
+/** Parses an MSON line like "domainName : example.com (string, optional) - Domain name". */
+function field(string $line): array
+{
+    if (! preg_match('/^(`[^`]+`|[^\s:(]+)(?:\s*:\s*(`[^`]*`|[^(]*?(?=\s*\(|\s+-\s|$)))?(?:\s*\(([^)]*)\))?\s*(?:-\s*)?(.*)$/', trim($line), $m)) {
+        fwrite(STDERR, "Can't parse attribute: $line\n");
+        exit(1);
+    }
+    $flags = array_map('trim', explode(',', $m[3] ?: 'string'));
+
+    return [
+        'name' => trim($m[1], '`'),
+        'example' => trim($m[2] ?? '', '` '),
+        'type' => array_shift($flags),
+        'optional' => in_array('optional', $flags),
+        'nullable' => in_array('nullable', $flags),
+        'description' => trim($m[4] ?? ''),
+    ];
+}
+
+function methodName(string $group, array $action): string
+{
+    global $usedNames;
+    if ($name = METHOD_NAMES[key_of($group, $action)] ?? null) {
+        $usedNames[] = key_of($group, $action);
+
+        return $name;
+    }
+
+    // "Get SSH key by id" -> get ssh key, "List a single invoice" -> get invoice.
+    $title = preg_replace(['/\s+by\s+.*$/i', '/\[.*?\]/', '/^list (a single|single|a|an) /i'], ['', '', 'get '], $action['title']);
+    $stop = ['a', 'an', 'the', 'all', 'new', 'single', 'existing', 'specific', 'for', 'of', 'to', 'from', 'on', 'in', 'your', 'about'];
+    $words = array_values(array_filter(
+        preg_split('/[^a-z0-9]+/i', $title, -1, PREG_SPLIT_NO_EMPTY),
+        fn ($w) => ! in_array(strtolower($w), $stop),
+    ));
+
+    // Drop the group's own noun: domains()->register(), not domains()->registerDomain().
+    foreach (GROUP_NOUNS[$group] ?? [] as $noun) {
+        $noun = explode(' ', $noun);
+        $n = count($noun);
+        $matches = fn (int $at) => $at > 0 && $at + $n <= count($words)
+            && strtolower(implode(' ', array_slice($words, $at, $n - 1))) === implode(' ', array_slice($noun, 0, -1))
+            && preg_match('/^'.preg_quote(end($noun), '/').'(s|es)?$/i', $words[$at + $n - 1]);
+        $at = $matches(count($words) - $n) ? count($words) - $n : ($matches(1) && count($words) > $n + 1 ? 1 : null);
+        if ($at !== null) {
+            array_splice($words, $at, $n);
+            break;
+        }
+    }
+
+    // DNS -> Dns, privateNetwork -> PrivateNetwork.
+    $words = array_map(fn ($w) => preg_match('/^[A-Z]{2}/', $w) ? ucfirst(strtolower($w)) : ucfirst($w), $words);
+
+    return lcfirst(implode('', $words));
+}
+
+function key_of(string $group, array $action): string
+{
+    return "$group|{$action['method']} {$action['path']}|{$action['title']}";
+}
+
+function renderMethod(string $name, array $action, array $structs): string
+{
+    preg_match_all('/\{(\w+)\}/', $action['path'], $m);
+    $pathParams = $m[1];
+    $params = array_column($action['params'], null, 'name');
+
+    // Parameters that aren't in the path (e.g. "include") are query options.
+    $options = array_merge(
+        array_values(array_filter($action['params'], fn ($p) => ! in_array($p['name'], $pathParams))),
+        $action['request'],
+    );
+
+    // A fixed "action" attribute (Start a VPS = PATCH {"action": "start"}) is filled in for you.
+    $fixed = [];
+    $options = array_values(array_filter($options, function ($o) use (&$fixed) {
+        if ($o['name'] === 'action' && $o['type'] === 'string' && $o['example'] !== '' && ! preg_match('/\bor\b|either/i', $o['description'])) {
+            $fixed['action'] = $o['example'];
+
+            return false;
+        }
+
+        return true;
+    }));
+
+    $args = [];
+    $doc = [];
+    foreach ($pathParams as $p) {
+        $type = ($params[$p]['type'] ?? 'string') === 'number' ? 'int|string' : 'string';
+        $args[] = "$type \$$p";
+        $doc[] = "@param  $type  \$$p  ".describe($params[$p] ?? null);
+    }
+
+    $required = array_filter($options, fn ($o) => ! $o['optional']);
+    if ($options) {
+        $args[] = 'array $data'.($required ? '' : ' = []');
+        $doc[] = '@param  '.shape($options, $structs).'  $data';
+    }
+    $doc[] = '@return '.($action['response'] ? shape($action['response'], $structs) : 'array{}');
+    $doc[] = '';
+    $doc[] = '@throws \Djl997\LaravelTransip\TransipException';
+
+    $path = preg_replace_callback('/\{(\w+)\}/', fn ($m) => "'.rawurlencode(".(($params[$m[1]]['type'] ?? '') === 'number' ? '(string) ' : '')."\${$m[1]}).'", $action['path']);
+    $path = preg_replace("/^''\\.|\\.''$/", '', "'".ltrim($path, '/')."'");
+
+    $data = $options ? '$data' : '';
+    if ($fixed) {
+        $data = "['action' => ".var_export($fixed['action'], true).']'.($options ? ' + $data' : '');
+    }
+    $call = '$this->transip->'.strtolower($action['method'])."($path".($data ? ", $data" : '').')';
+
+    $lines = [$action['title'].'.', '', ...descriptionLines($action['description'])];
+    if ($options) {
+        $lines[] = '';
+        $lines[] = $action['method'] === 'GET' ? 'Query options ($data):' : 'Body ($data):';
+        foreach ($options as $o) {
+            $lines[] = rtrim("- {$o['name']} ({$o['type']}".($o['optional'] ? ', optional' : '').($o['nullable'] ? ', nullable' : '').'): '.describe($o), ': ');
+        }
+    }
+    if ($fixed) {
+        $lines[] = '';
+        $lines[] = "Sends \"action\": \"{$fixed['action']}\" for you.";
+    }
+    $lines[] = '';
+    $lines[] = "{$action['method']} /v6{$action['path']}";
+    $lines[] = '';
+    $lines[] = '@link '.DOCS.'#'.$action['anchor'];
+    $lines = [...$lines, ...$doc];
+
+    $signature = implode(', ', $args);
+    $docblock = implode("\n", array_map(fn ($l) => rtrim('     * '.str_replace('*/', '*\/', $l)), $lines));
+
+    return <<<PHP
+            /**
+        $docblock
+             */
+            public function $name($signature): array
+            {
+                return $call;
+            }
+
+        PHP;
+}
+
+function describe(?array $field): string
+{
+    $text = rtrim($field['description'] ?? '');
+    $example = $field['example'] ?? '';
+    if ($example !== '' && ! str_starts_with($example, '/')) {
+        $text .= ($text === '' ? 'e.g.' : (preg_match('/[.!?)]$/', $text) ? ' E.g.' : ', e.g.'))." `$example`";
+    }
+
+    return $text;
+}
+
+/** @return list<string> */
+function descriptionLines(string $text): array
+{
+    $text = preg_replace(['/<[^>]+>/', '/^\s*:::.*$/m', '/\*\*/'], '', $text);
+    $text = str_replace('](#', ']('.DOCS.'#', $text);
+    $lines = array_map('trim', explode("\n", trim($text)));
+    $out = [];
+    foreach ($lines as $line) {
+        if ($line === '' && (end($out) === '' || $out === [])) {
+            continue;
+        }
+        $out[] = $line;
+    }
+    while (end($out) === '') {
+        array_pop($out);
+    }
+
+    return $out;
+}
+
+/** Turns MSON attributes into a PHPDoc array shape. */
+function shape(array $fields, array $structs, int $depth = 0): string
+{
+    $parts = array_map(fn ($f) => $f['name'].($f['optional'] ? '?' : '').': '.type($f, $structs, $depth), $fields);
+
+    return 'array{'.implode(', ', $parts).'}';
+}
+
+function type(array $field, array $structs, int $depth): string
+{
+    $type = $field['type'];
+    $php = match (true) {
+        $type === 'string' => 'string',
+        $type === 'number' => preg_match('/^-?\d+$/', $field['example']) || $field['example'] === '' ? 'int' : 'float',
+        $type === 'boolean' => 'bool',
+        $type === 'object' => 'array<string, mixed>',
+        $type === 'array' => 'array<mixed>',
+        (bool) preg_match('/^array\[(\w+)\]$/', $type, $m) => 'list<'.type(['type' => $m[1], 'example' => ''], $structs, $depth).'>',
+        isset($structs[$type]) && $depth < 3 => shape($structs[$type], $structs, $depth + 1),
+        isset($structs[$type]) => 'array<string, mixed>',
+        default => 'mixed',
+    };
+
+    return ($field['nullable'] ?? false) && $php !== 'mixed' ? "$php|null" : $php;
+}
+
+function slug(string $s): string
+{
+    return trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($s)), '-');
+}

@@ -9,10 +9,13 @@ use Illuminate\Http\Client\Response;
 
 /**
  * Thin client for https://api.transip.nl/rest/docs.html. Paths are relative to /v6,
- * e.g. Transip::get('domains/example.com/dns').
+ * e.g. Transip::get('domains/example.com/dns'), or use the typed resources:
+ * Transip::domains()->listDnsEntries('example.com').
  */
 class Transip
 {
+    use HasResources;
+
     public function __construct(
         protected Http $http,
         protected Cache $cache,

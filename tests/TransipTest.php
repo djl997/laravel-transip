@@ -109,6 +109,29 @@ class TransipTest extends TestCase
         }
     }
 
+    public function test_resources_map_to_endpoints(): void
+    {
+        config(['transip.token' => 'demo']);
+        $this->app->forgetInstance(\Djl997\LaravelTransip\Transip::class);
+        Transip::clearResolvedInstances();
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        Transip::domains()->register(['domainName' => 'xyz.nl']);
+        Transip::domains()->list(['include' => 'nameservers']);
+        Transip::vps()->revertBackup('my vps', 7);
+
+        Http::assertSent(fn (Request $r) => $r->method() === 'POST'
+            && $r->url() === 'https://api.transip.nl/v6/domains'
+            && $r->data() === ['domainName' => 'xyz.nl']);
+
+        Http::assertSent(fn (Request $r) => $r->method() === 'GET'
+            && $r->url() === 'https://api.transip.nl/v6/domains?include=nameservers');
+
+        Http::assertSent(fn (Request $r) => $r->method() === 'PATCH'
+            && $r->url() === 'https://api.transip.nl/v6/vps/my%20vps/backups/7'
+            && $r->data() === ['action' => 'revert']);
+    }
+
     public function test_bad_private_key_throws(): void
     {
         config(['transip.private_key' => 'not a key']);

@@ -1,6 +1,8 @@
 # Laravel TransIP
 
-A small Laravel client for the [TransIP REST API v6](https://api.transip.nl/rest/docs.html). It signs the auth request with your private key, caches the access token, and gives you `get` / `post` / `put` / `patch` / `delete` for every endpoint.
+A small Laravel client for the [TransIP REST API v6](https://api.transip.nl/rest/docs.html). It signs the auth request with your private key, caches the access token, and gives you a typed method for every documented endpoint, plus `get` / `post` / `put` / `patch` / `delete` for raw calls.
+
+Checked against **TransIP API v6.55** (293 endpoints).
 
 ## Install
 
@@ -24,7 +26,31 @@ Make a key pair in the TransIP control panel under *Account → API*.
 
 ## Usage
 
-Paths are relative to `https://api.transip.nl/v6`. Each call returns the decoded JSON as an array (`[]` for empty responses).
+Each call returns the decoded JSON as an array (`[]` for empty responses).
+
+### Resources
+
+The resources follow the groups in the TransIP docs: `general()`, `account()`, `domains()`, `forwardingService()`, `vps()`, `haip()`, `kubernetes()`, `acronis()`, `filehosting()`, `openStack()`, `sslCertificates()`, `colocations()`, `email()` and `actions()`.
+
+```php
+use Djl997\LaravelTransip\Facades\Transip;
+
+Transip::domains()->checkAvailability('xyz.nl')['availability']['status'];
+Transip::domains()->register(['domainName' => 'xyz.nl']);
+Transip::domains()->list(['include' => 'nameservers'])['domains'];
+Transip::domains()->addDnsEntry('example.com', [
+    'dnsEntry' => ['name' => 'www', 'expire' => 300, 'type' => 'A', 'content' => '1.2.3.4'],
+]);
+
+Transip::vps()->start('example-vps');   // sends {"action": "start"} for you
+Transip::vps()->createSnapshot('example-vps', ['description' => 'before upgrade']);
+```
+
+Every method's docblock has the TransIP description, the options with their types and descriptions, the HTTP method and path, a link to the docs, and array shapes for `$data` and the result. Your IDE (and AI agents) can complete the option keys and response fields without the docs. For GET calls, `$data` is sent as the query string. Otherwise it's the JSON body.
+
+### Raw calls
+
+Paths are relative to `https://api.transip.nl/v6`.
 
 ```php
 use Djl997\LaravelTransip\Facades\Transip;
@@ -52,6 +78,16 @@ A non-2xx response throws `Djl997\LaravelTransip\TransipException`. The message 
 ### Rate limits
 
 TransIP allows 1000 requests per 15 minutes. Read the `X-Rate-Limit-*` headers from `$e->response` when you get a `429`.
+
+## Updating to a new TransIP API version
+
+The resources are generated from TransIP's [API Blueprint](https://api.transip.nl/rest/blueprint.apib), the source of the docs page:
+
+```bash
+composer generate
+```
+
+This rewrites `src/Resources/*`, `src/HasResources.php` and the `@method` lines in the facade, then runs Pint. If TransIP adds a method name that collides or reads badly, the script stops and points you to `METHOD_NAMES` in `bin/generate-resources`. Update the version above after you've checked the diff.
 
 ## Testing
 

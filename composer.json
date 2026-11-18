@@ -33,7 +33,11 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "generate": [
+            "php bin/generate-resources",
+            "pint"
+        ]
     },
     "extra": {
         "laravel": {
