@@ -1,0 +1,24 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Laravel package (`djl997/laravel-transip`) for the TransIP REST API v6. Docs: https://api.transip.nl/rest/docs.html
+
+## Design
+
+- One generic client (`src/Transip.php`) with `get/post/put/patch/delete`. Paths are relative to `/v6`. Don't add a class or method per resource unless asked: the generic calls already cover every endpoint.
+- Responses are returned as decoded arrays exactly as TransIP sends them (e.g. `['domains' => [...]]`). Don't add DTOs.
+- Non-2xx responses throw `TransipException` (message = TransIP's `error` field, code = HTTP status).
+
+## Gotchas
+
+- Auth: `POST /auth` must send the exact JSON string that was signed (RSA-SHA512, base64, `Signature` header). Use `withBody($json)`, never `->post($array)`, because Laravel re-encodes the array and the signature breaks. Request bodies go through `withBody` too.
+- The token is cached under a key derived from login/endpoint/read_only/global_key. On a 401 the client clears it and retries once. Setting `transip.token` skips key auth entirely.
+- `test_mode` adds `?test=1` to every request: TransIP validates the call but doesn't run it.
+
+## Testing
+
+- `composer test` (PHPUnit + Testbench). All HTTP goes through `Http::fake()`. Tests generate an RSA key pair and check the signature with `openssl_verify`.
+- `Transip` is a singleton, so after changing config inside a test, call `$this->app->forgetInstance(\Djl997\LaravelTransip\Transip::class)` and `Transip::clearResolvedInstances()`.
+- Live smoke test without credentials: use the public demo token (the long `eyJ...` JWT on the docs page) as `token` with `test_mode => true`. Reads return demo data and writes are validated only.
+- Format with `vendor/bin/pint` (Laravel preset).

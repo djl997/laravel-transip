@@ -1,0 +1,50 @@
+{
+    "name": "djl997/laravel-transip",
+    "description": "Laravel client for the TransIP REST API v6.",
+    "keywords": ["laravel", "transip", "api", "dns", "domains", "vps"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Dirk Jan Laros",
+            "email": "info@q2-software.nl"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "illuminate/cache": "^11.0|^12.0|^13.0",
+        "illuminate/http": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0",
+        "laravel/pint": "^1.32"
+    },
+    "autoload": {
+        "psr-4": {
+            "Djl997\\LaravelTransip\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Djl997\\LaravelTransip\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Djl997\\LaravelTransip\\TransipServiceProvider"
+            ],
+            "aliases": {
+                "Transip": "Djl997\\LaravelTransip\\Facades\\Transip"
+            }
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
